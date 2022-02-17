@@ -46,7 +46,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
         private readonly CancellationToken _cancellationToken;
         private readonly ProjectCachePluginBase _projectCachePlugin;
         private readonly string _projectCachePluginTypeName;
-        private ProjectCacheServiceState _serviceState = ProjectCacheServiceState.NotInitialized;
+        internal ProjectCacheServiceState ServiceState { get; private set; } = ProjectCacheServiceState.NotInitialized;
 
         /// <summary>
         /// An instanatiable version of MSBuildFileSystemBase not overriding any methods,
@@ -166,7 +166,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
         {
             try
             {
-                return (ProjectCachePluginBase) Activator.CreateInstance(pluginType)!;
+                return (ProjectCachePluginBase)Activator.CreateInstance(pluginType)!;
             }
             catch (TargetInvocationException e) when (e.InnerException != null)
             {
@@ -200,7 +200,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
             IEnumerable<Type> GetTypes<T>(Assembly assembly)
             {
                 return assembly.ExportedTypes
-                    .Select(type => new {type, info = type.GetTypeInfo()})
+                    .Select(type => new { type, info = type.GetTypeInfo() })
                     .Where(
                         t => t.info.IsClass &&
                              t.info.IsPublic &&
@@ -450,7 +450,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
                     // InnerBuildPropertyName is TargetFramework for the managed sdk.
                     var innerBuildPropertyName = ProjectInterpretation.GetInnerBuildPropertyName(project);
 
-                    IEnumerable<string> projectSpecificPropertyNames = new []{innerBuildPropertyName, "Configuration", "Platform", "TargetPlatform", "OutputType"};
+                    IEnumerable<string> projectSpecificPropertyNames = new[] { innerBuildPropertyName, "Configuration", "Platform", "TargetPlatform", "OutputType" };
 
                     foreach (var propertyName in projectSpecificPropertyNames)
                     {
@@ -473,7 +473,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
                 CheckNotInState(ProjectCacheServiceState.NotInitialized);
                 CheckNotInState(ProjectCacheServiceState.BeginBuildStarted);
 
-                if (_serviceState is ProjectCacheServiceState.ShutdownStarted or ProjectCacheServiceState.ShutdownFinished)
+                if (ServiceState is ProjectCacheServiceState.ShutdownStarted or ProjectCacheServiceState.ShutdownFinished)
                 {
                     return CacheResult.IndicateNonCacheHit(CacheResultType.CacheNotApplicable);
                 }
@@ -582,18 +582,25 @@ namespace Microsoft.Build.Experimental.ProjectCache
                 _loggingService,
                 BuildEventContext.Invalid,
                 BuildEventFileInfo.Empty);
-
+            bool shouldInitiateShutdownState = ServiceState != ProjectCacheServiceState.ShutdownStarted && ServiceState != ProjectCacheServiceState.ShutdownFinished;
             try
             {
-                SetState(ProjectCacheServiceState.ShutdownStarted);
-                _loggingService.LogComment(buildEventContext, MessageImportance.Low, "ProjectCacheEndBuild");
-                MSBuildEventSource.Log.ProjectCacheEndBuildStart(_projectCachePluginTypeName);
-
-                await _projectCachePlugin.EndBuildAsync(pluginLogger, _cancellationToken);
-
-                if (pluginLogger.HasLoggedErrors)
+                if (shouldInitiateShutdownState)
                 {
-                    ProjectCacheException.ThrowForErrorLoggedInsideTheProjectCache("ProjectCacheShutdownFailed");
+                    lock (this)
+                    {
+                        SetState(ProjectCacheServiceState.ShutdownStarted);
+                    }
+
+                    _loggingService.LogComment(buildEventContext, MessageImportance.Low, "ProjectCacheEndBuild");
+                    MSBuildEventSource.Log.ProjectCacheEndBuildStart(_projectCachePluginTypeName);
+
+
+                    await _projectCachePlugin.EndBuildAsync(pluginLogger, _cancellationToken);
+                    if (pluginLogger.HasLoggedErrors)
+                    {
+                        ProjectCacheException.ThrowForErrorLoggedInsideTheProjectCache("ProjectCacheShutdownFailed");
+                    }
                 }
             }
             catch (Exception e) when (e is not ProjectCacheException)
@@ -603,7 +610,10 @@ namespace Microsoft.Build.Experimental.ProjectCache
             finally
             {
                 MSBuildEventSource.Log.ProjectCacheEndBuildStop(_projectCachePluginTypeName);
-                SetState(ProjectCacheServiceState.ShutdownFinished);
+                if (shouldInitiateShutdownState)
+                {
+                    SetState(ProjectCacheServiceState.ShutdownFinished);
+                }
             }
         }
 
@@ -646,7 +656,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
                         throw new ArgumentOutOfRangeException(nameof(newState), newState, null);
                 }
 
-                _serviceState = newState;
+                ServiceState = newState;
             }
         }
 
@@ -654,7 +664,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
         {
             lock (this)
             {
-                ErrorUtilities.VerifyThrowInternalError(_serviceState == expectedState, $"Expected state {expectedState}, actual state {_serviceState}");
+                ErrorUtilities.VerifyThrowInternalError(ServiceState == expectedState, $"Expected state {expectedState}, actual state {ServiceState}");
             }
         }
 
@@ -662,7 +672,7 @@ namespace Microsoft.Build.Experimental.ProjectCache
         {
             lock (this)
             {
-                ErrorUtilities.VerifyThrowInternalError(_serviceState != unexpectedState, $"Unexpected state {_serviceState}");
+                ErrorUtilities.VerifyThrowInternalError(ServiceState != unexpectedState, $"Unexpected state {ServiceState}");
             }
         }
 
