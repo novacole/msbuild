@@ -2083,11 +2083,7 @@ namespace Microsoft.Build.Execution
                 {
                     try
                     {
-                        ProjectCacheService service = _buildManager._projectCacheService?.Result;
-                        if (service.ServiceState != ProjectCacheServiceState.ShutdownStarted && service.ServiceState != ProjectCacheServiceState.ShutdownFinished)
-                        {
-                            service.ShutDown().GetAwaiter().GetResult();
-                        }
+                        _buildManager._projectCacheService?.Result.ShutDown().GetAwaiter().GetResult();
                     }
                     finally
                     {

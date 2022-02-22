@@ -583,24 +583,28 @@ namespace Microsoft.Build.Experimental.ProjectCache
                 BuildEventContext.Invalid,
                 BuildEventFileInfo.Empty);
             bool shouldInitiateShutdownState = ServiceState != ProjectCacheServiceState.ShutdownStarted && ServiceState != ProjectCacheServiceState.ShutdownFinished;
+
+            if (!shouldInitiateShutdownState)
+            {
+                return;
+            }
+
             try
             {
-                if (shouldInitiateShutdownState)
+
+                lock (this)
                 {
-                    lock (this)
-                    {
-                        SetState(ProjectCacheServiceState.ShutdownStarted);
-                    }
+                    SetState(ProjectCacheServiceState.ShutdownStarted);
+                }
 
-                    _loggingService.LogComment(buildEventContext, MessageImportance.Low, "ProjectCacheEndBuild");
-                    MSBuildEventSource.Log.ProjectCacheEndBuildStart(_projectCachePluginTypeName);
+                _loggingService.LogComment(buildEventContext, MessageImportance.Low, "ProjectCacheEndBuild");
+                MSBuildEventSource.Log.ProjectCacheEndBuildStart(_projectCachePluginTypeName);
 
 
-                    await _projectCachePlugin.EndBuildAsync(pluginLogger, _cancellationToken);
-                    if (pluginLogger.HasLoggedErrors)
-                    {
-                        ProjectCacheException.ThrowForErrorLoggedInsideTheProjectCache("ProjectCacheShutdownFailed");
-                    }
+                await _projectCachePlugin.EndBuildAsync(pluginLogger, _cancellationToken);
+                if (pluginLogger.HasLoggedErrors)
+                {
+                    ProjectCacheException.ThrowForErrorLoggedInsideTheProjectCache("ProjectCacheShutdownFailed");
                 }
             }
             catch (Exception e) when (e is not ProjectCacheException)
